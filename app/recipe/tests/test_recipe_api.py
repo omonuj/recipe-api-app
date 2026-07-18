@@ -202,6 +202,37 @@ class PrivateRecipeApiTests(TestCase):
         tags = recipe.tags.all()
         self.assertEqual(len(tags), 0)
 
+    def test_create_recipe_invalid(self):
+        """Test creating a recipe with an invalid payload fails"""
+        payload = {'title': ''}
+        res = self.client.post(RECIPES_URL, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_delete_recipe(self):
+        """Test deleting a recipe removes it from the database"""
+        recipe = sample_recipe(user=self.user)
+        url = detail_url(recipe.id)
+
+        res = self.client.delete(url)
+
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Recipe.objects.filter(id=recipe.id).exists())
+
+    def test_delete_other_users_recipe_not_found(self):
+        """Test a user cannot delete a recipe owned by another user"""
+        other_user = get_user_model().objects.create_user(
+            'other@londonappdev.com',
+            'password123'
+        )
+        recipe = sample_recipe(user=other_user)
+        url = detail_url(recipe.id)
+
+        res = self.client.delete(url)
+
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Recipe.objects.filter(id=recipe.id).exists())
+
 
 class RecipeImageUploadTests(TestCase):
 
