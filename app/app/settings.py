@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/2.1/ref/settings/
 
 import os
 
+import dj_database_url
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,12 +22,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/2.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'r*#fqj65k!9s9*+#c6a%2h-um50sjmzbe8dd1vyw$+-l$mz(jt'
+# Provided via the SECRET_KEY env var in production; falls back to an
+# insecure development key for local/Docker use.
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY',
+    'r*#fqj65k!9s9*+#c6a%2h-um50sjmzbe8dd1vyw$+-l$mz(jt',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Set DEBUG=0 (or 'False') in the environment to disable.
+DEBUG = os.environ.get('DEBUG', '1').lower() not in ('0', 'false')
 
-ALLOWED_HOSTS = []
+# Comma-separated list of hosts, e.g. ".vercel.app,example.com".
+ALLOWED_HOSTS = [
+    host for host in os.environ.get('ALLOWED_HOSTS', '').split(',') if host
+]
+
+# Trust the deployment origin for CSRF (needed for the admin / browsable API).
+CSRF_TRUSTED_ORIGINS = [
+    origin
+    for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin
+]
 
 
 # Application definition
@@ -39,13 +57,28 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
+    'drf_spectacular',
     'core',
     'user',
     'recipe',
 ]
 
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Recipe API',
+    'DESCRIPTION': 'API for creating and managing recipes, tags, '
+                   'ingredients, and recipe images.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+}
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -77,16 +110,27 @@ WSGI_APPLICATION = 'app.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/2.1/ref/settings/#databases
+#
+# In production (e.g. Vercel) set a single DATABASE_URL pointing at a managed
+# PostgreSQL instance. Locally / in Docker the individual DB_* vars are used.
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'HOST': os.environ.get('DB_HOST'),
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_USER'),
-        'PASSWORD': os.environ.get('DB_PASS'),
+if os.environ.get('DATABASE_URL'):
+    DATABASES = {
+        'default': dj_database_url.config(
+            conn_max_age=600,
+            ssl_require=True,
+        )
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'HOST': os.environ.get('DB_HOST'),
+            'NAME': os.environ.get('DB_NAME'),
+            'USER': os.environ.get('DB_USER'),
+            'PASSWORD': os.environ.get('DB_PASS'),
+        }
+    }
 
 
 # Password validation
@@ -133,7 +177,21 @@ MEDIA_URL = '/media/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
-MEDIA_ROOT = '/vol/web/media'
-STATIC_ROOT = '/vol/web/static'
+# Paths default to the Docker volume but can be overridden in other
+# environments (e.g. Vercel writes collected static to a build directory).
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', '/vol/web/media')
+STATIC_ROOT = os.environ.get('STATIC_ROOT', '/vol/web/static')
+
+# Serve compressed, hashed static files via WhiteNoise in production.
+if not DEBUG:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.'
+                       'CompressedManifestStaticFilesStorage',
+        },
+    }
 
 AUTH_USER_MODEL = 'core.User'

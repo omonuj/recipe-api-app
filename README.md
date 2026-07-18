@@ -1,5 +1,7 @@
 # Recipe API App
 
+[![CI/CD](https://github.com/omonuj/recipe-api-app/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/omonuj/recipe-api-app/actions/workflows/ci-cd.yml)
+
 A RESTful API for managing recipes, built with **Django** and the **Django REST
 Framework**. Authenticated users can create and manage their own recipes,
 including the tags and ingredients that describe them, and upload an image for
@@ -18,9 +20,12 @@ with a full **unit-test suite**, and enforces style with **flake8**.
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
+- [Interactive API Docs (Swagger)](#interactive-api-docs-swagger)
 - [Authentication](#authentication)
 - [Running the Tests](#running-the-tests)
 - [Linting](#linting)
+- [Continuous Integration & Deployment](#continuous-integration--deployment)
+- [Deployment (Vercel)](#deployment-vercel)
 - [Data Model](#data-model)
 - [License](#license)
 
@@ -35,6 +40,7 @@ with a full **unit-test suite**, and enforces style with **flake8**.
 - **Filtering** — filter recipes by tags/ingredients, and filter tags/
   ingredients to only those assigned to a recipe.
 - **Image upload** — attach an image to a recipe via a dedicated endpoint.
+- **Interactive OpenAPI 3 docs** — Swagger UI and ReDoc via `drf-spectacular`.
 - **Django admin** customised for the email-based user model.
 - **`wait_for_db`** management command so the app starts cleanly once
   PostgreSQL is ready.
@@ -50,6 +56,8 @@ with a full **unit-test suite**, and enforces style with **flake8**.
 | Language         | Python 3.11                         |
 | Web framework    | Django 4.2 (LTS)                    |
 | API framework    | Django REST Framework 3.15          |
+| API docs         | drf-spectacular (OpenAPI 3 / Swagger) |
+| Deployment       | Vercel (serverless) + WhiteNoise    |
 | Database         | PostgreSQL 15                       |
 | DB driver        | psycopg2 2.9                        |
 | Image handling   | Pillow 10                           |
@@ -205,6 +213,29 @@ assigned to a recipe.
 
 ---
 
+## Interactive API Docs (Swagger)
+
+The API ships with auto-generated **OpenAPI 3.0** documentation powered by
+[`drf-spectacular`](https://drf-spectacular.readthedocs.io/). Once the app is
+running:
+
+| Tool           | URL                                      |
+| -------------- | ---------------------------------------- |
+| Swagger UI     | http://127.0.0.1:8000/api/docs/          |
+| ReDoc          | http://127.0.0.1:8000/api/redoc/         |
+| Raw schema     | http://127.0.0.1:8000/api/schema/        |
+
+Swagger UI is interactive — click **Authorize**, paste `Token <your-token>`,
+and you can exercise every endpoint from the browser.
+
+Generate the schema file from the command line:
+
+```bash
+docker-compose run --rm app sh -c "python manage.py spectacular --file schema.yml"
+```
+
+---
+
 ## Authentication
 
 Protected endpoints use **Token authentication**.
@@ -270,6 +301,112 @@ docker-compose run --rm app sh -c "flake8"
 
 Configuration lives in [app/.flake8](app/.flake8) (migrations, `manage.py`, and
 `settings.py` are excluded).
+
+---
+
+## Continuous Integration & Deployment
+
+CI/CD runs on **GitHub Actions**
+([.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml)):
+
+- **`test` job** — on every push and pull request to `master`, spins up the
+  Docker stack and runs `wait_for_db`, the full test suite, and `flake8`. This
+  is the exact command used locally, so CI mirrors development.
+- **`deploy` job** — on pushes to `master` (after tests pass), deploys to
+  Vercel using the Vercel CLI. It **skips gracefully** if the Vercel secrets
+  aren't configured, so the pipeline stays green until you opt in.
+
+### Enabling automatic deploys
+
+You have two options:
+
+**Option A — Vercel's native Git integration (simplest).** Connect the repo in
+the Vercel dashboard; Vercel builds a preview for every PR and deploys `master`
+to production automatically. No secrets needed — the `deploy` job stays skipped.
+
+**Option B — Deploy from GitHub Actions.** Add three
+[repository secrets](https://github.com/omonuj/recipe-api-app/settings/secrets/actions)
+(Settings → Secrets and variables → Actions):
+
+| Secret              | Where to find it                                       |
+| ------------------- | ------------------------------------------------------ |
+| `VERCEL_TOKEN`      | Vercel → Account Settings → Tokens                     |
+| `VERCEL_ORG_ID`     | `.vercel/project.json` after running `vercel link`     |
+| `VERCEL_PROJECT_ID` | `.vercel/project.json` after running `vercel link`     |
+
+Once set, every push to `master` runs the tests and then deploys to production.
+
+---
+
+## Deployment (Vercel)
+
+The project is configured to deploy to **Vercel** as a Python serverless
+function. The relevant files are [vercel.json](vercel.json),
+[api/index.py](api/index.py) (the WSGI entrypoint), and
+[build_files.sh](build_files.sh) (collects static assets at build time).
+
+### Serverless caveats (read first)
+
+Vercel has **no persistent filesystem** and no long-running process, so:
+
+- **You must use an external managed PostgreSQL** database — e.g.
+  [Vercel Postgres](https://vercel.com/docs/storage/vercel-postgres),
+  [Neon](https://neon.tech), or [Supabase](https://supabase.com) (all free
+  tiers). SQLite / local Postgres will not work.
+- **Uploaded recipe images do not persist** between requests. The API works
+  fully; only image files are ephemeral. To keep them, wire up cloud storage
+  (e.g. S3 or Cloudinary via `django-storages`) as a follow-up.
+
+### 1. Provision a database
+
+Create a Postgres instance with any provider above and copy its connection
+string (a `postgres://...` URL).
+
+### 2. Configure environment variables (Vercel dashboard → Settings → Environment Variables)
+
+See [.env.example](.env.example) for the full list:
+
+| Variable               | Example                                  |
+| ---------------------- | ---------------------------------------- |
+| `SECRET_KEY`           | a long random string                     |
+| `DEBUG`                | `0`                                      |
+| `ALLOWED_HOSTS`        | `.vercel.app`                            |
+| `CSRF_TRUSTED_ORIGINS` | `https://your-project.vercel.app`        |
+| `DATABASE_URL`         | `postgres://user:pass@host:5432/dbname`  |
+
+### 3. Run migrations against the remote database
+
+Serverless functions shouldn't run migrations on cold start, so apply them once
+from your machine (or any shell) pointed at the same `DATABASE_URL`:
+
+```bash
+DATABASE_URL="postgres://user:pass@host:5432/dbname" \
+  python app/manage.py migrate
+```
+
+Create an admin user the same way if you want the Django admin:
+
+```bash
+DATABASE_URL="postgres://..." python app/manage.py createsuperuser
+```
+
+### 4. Deploy
+
+```bash
+npm i -g vercel        # first time only
+vercel                 # preview deploy
+vercel --prod          # production deploy
+```
+
+Or connect the GitHub repo in the Vercel dashboard for automatic deploys on
+push.
+
+After deploying, your docs will be live at
+`https://your-project.vercel.app/api/docs/`.
+
+> **Settings are backward-compatible:** when `DATABASE_URL` and the other
+> production variables are absent, the app falls back to the local Docker
+> configuration, so `docker-compose up` keeps working unchanged.
 
 ---
 

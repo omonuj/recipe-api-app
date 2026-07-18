@@ -105,3 +105,8 @@ venv.bak/
 
 # macOS
 .DS_Store
+
+# Vercel
+.vercel
+staticfiles_build/
+.env
